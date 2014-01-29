@@ -1,7 +1,7 @@
 flow-pairs
 ===========
 
-Flow-pairs:  A top 10 script gone crazy
+Flow-pairs:  A netflow top 10 script gone crazy
 
 Description:
 The flow-pairs script gives a picture of large bandwidth consumers within
