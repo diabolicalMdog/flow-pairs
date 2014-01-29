@@ -1,0 +1,1896 @@
+#!/usr/bin/perl -w
+
+=head1 LICENSE
+
+Copyright (C) 2001 The Regents of the University of California.
+All Rights Reserved.
+Permission to use, copy, modify, and distribute this software and its
+documentation for educational, research and non-profit purposes, without
+fee, and without a written agreement is hereby granted, provided that the
+above copyright notice, this paragraph and the following three paragraphs
+appear in all copies.
+
+Permission to incorporate this software into commercial products may
+be obtained by contacting the University of California: 
+Bill Hoskins
+Office of Technology Licensing
+2150 Shattuck Avenue #150
+Berkeley, CA 94720-1620
+(510) 643-7201
+bhoskins@uclink2.berkeley.edu
+ 
+This software program and documentation are copyrighted by The Regents
+of the University of California. The software program and documentation
+are supplied "as is", without any accompanying services from
+The Regents. The Regents does not warrant that the operation of the program
+will be uninterrupted or error-free. The end-user understands that the
+program was developed for research purposes and is advised not to rely
+exclusively on the program for any reason.
+
+IN NO EVENT SHALL THE UNIVERSITY OF CALIFORNIA BE LIABLE TO ANY PARTY
+FOR DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, INCLUDING
+LOST PROFITS, ARISING OUT OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION,
+EVEN IF THE UNIVERSITY OF CALIFORNIA HAS BEEN ADVISED OF THE POSSIBILITY
+OF SUCH DAMAGE. THE UNIVERSITY OF CALIFORNIA SPECIFICALLY DISCLAIMS ANY
+WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF 
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. THE SOFTWARE PROVIDED 
+HEREUNDER IS ON AN "AS IS" BASIS, AND THE UNIVERSITY OF CALIFORNIA HAS NO
+OBLIGATIONS TO PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR 
+MODIFICATIONS.
+
+This software is based on Mark Fullmer's flow-tools 
+http://www.splintered.net/sw/flow-tools/
+
+=head1 NAME
+
+flow-pairs
+
+=head1 DESCRIPTION
+
+This script generates a report of high-utilization hosts.  The reports
+come in two different personalities, one of which shows peers and one
+of which shows detailed port usage.  Both attempt to aggregate high ports
+to give a more intelligent picture.
+
+=head1 SUMMARY
+
+ flow-pairs -limit num -agg-lim num -sort sort_order -low-mem
+        -tempdir dir -csv file -stdin -trash-off -trash-on -segregate 
+        -help -persons ip1,ip2,...
+        flows
+
+=head1 AUTHOR
+
+Mike Hunter - UCB
+12 Novmber 2002
+
+Additional hacking by Max Baker - UCSC 6/2003
+
+=head1 COMMAND LINE ARGUMENTS
+
+=over
+
+=item -ports
+
+Show the host in the ports style, showing more detailed port usage instead
+of peers.  The default of showing pairs is done otherwise.
+
+=item -agg-lim
+
+How many unique ip:port pairs to associate before aggregation 
+kicks in.  Alias of "-a".
+
+=item -csv
+
+Write a comma-separated-values version of the report to file
+
+=item -csv-append
+
+Append instead of overwrite csv file.
+
+=item -debug
+
+Debug output
+
+=item -help
+
+You are here.
+
+=item -csv-hostnames
+
+Special hack to use only hostnames in csv.
+
+=item -hundred-hack-var
+
+(ugly hack) email address to send the top 100 to
+
+=item -ports-file
+
+Use a file in PORTNUM DESCRIPTION format (one per line) to look up port
+numbers.  Limit description to 5 characters or else weirdness will occur.
+
+=item -limit
+
+How many ips to report on.  Very meaningful in report generation 
+time.  This option defaults to 10 if omitted.  Alias of C<-l>.
+
+=item -mcast-seg
+
+Segregate multicast traffic
+
+=item -peers-display
+
+Sets how many peers or port patterns to display
+
+=item -persons
+
+A comma-separated list of persons to report on.  If omitted,
+we generate the persons ourselves via flow-stat.
+
+=item -segregate
+
+Separate off-campus and on-campus in the report (define "campus" below)
+
+=item -sort
+
+C<byoctets>, C<byflows>, or C<bypackets> as appropriate. 
+
+Not only does this specify the sort, but it's important
+when pruning the data, so specify which one you want.
+
+Alias of "-s".
+
+=item -stdin
+
+Process flow input from stdin.  Takes NO argument.  Should be unnecessary.
+
+=item -no-strict-grouping
+
+Do not keep a host's entries together
+
+=item -tag-str
+
+Replace hostname with special string in csv
+
+=item -tempdir
+
+What directory to put temporary files.  Alias of C<-t>
+
+=item -trash-off
+
+Do not print off-campus addresses
+
+=item -trash-on
+
+Do not print on-campus addresses
+
+=item -flow-report
+
+Use flow-report instead of flow-stat
+
+=item flows
+
+Space separated list of flows to crunch.
+
+=item src-zero-hack
+
+Discard flows with source address "0.0.0.0" to compensate for 6500 shortcomings
+
+=back
+
+=cut
+
+use strict;
+use Getopt::Long;
+use Socket;              # for DNS calls
+use Pod::Text ();        # for usage()
+use File::Temp;
+use NetAddr::IP;
+use Cflow;
+
+### ### ### ### ### ###
+# Globals
+### ### ### ### ### ###
+use vars qw/$debug $delete_flag $stdin_file $flow_data_names $counter $ports
+            $division_counter $division_point $mcast_demark $mcast_section_flag
+            $flow_cat_exe $flow_stat_exe $flow_print_exe $flow_report_exe 
+            $tempdir $domain $flowdir $ports_file %ports_db
+            $host_names $title $old_flavor $current_flavor $flavor_total
+            @Nets @Net_force_off_campus @sorted_prelim @sorted_thing @empty_row
+            %local_dns %host_hash %existance_hash 
+            %fs_sort_hash_8or9 %fs_sort_hash_10 %fprint_sort_hash %fs_sort_uber_hash
+           /;
+
+# UCSC
+#$domain = 'ucsc.edu';
+#@Nets = qw(169.233.0.0/16 128.114.0.0/16);
+#@Net_force_off_campus = qw();
+#$flowdir = 'flows';
+#$flow_cat_exe = "/usr/local/bin/flow-cat";
+#$flow_stat_exe = "/usr/local/bin/flow-stat";
+#$flow_print_exe = "/usr/local/bin/flow-print";
+#$tempdir = "/var/tmp";
+
+# UCB
+$domain = 'berkeley.edu';
+@Nets = qw(128.32.0.0/16 136.152.0.0/16 169.229.0.0/16 192.31.161.0/24
+              192.35.209.0/24 192.58.221.0/24 192.101.42.0/24 192.150.186.0/23);
+@Net_force_off_campus = qw(128.32.0.90 128.32.0.70 128.32.0.66);
+$flow_cat_exe = "/usr/local/bin/flow-cat";
+$flow_stat_exe = "/usr/local/bin/flow-stat";
+$flow_report_exe = "/usr/local/bin/flow-report";
+$flow_print_exe = "/usr/local/bin/flow-print";
+$flowdir = "/data3/netflow.inr-666";
+$tempdir = "/data4/reports.tmp";
+
+$debug = 0;
+$delete_flag = 0;
+$counter = 0;            # Counts total flows seen from Cflow::find()
+$division_counter=-1;
+$division_point = -1;    # The point in a list of IPs between on campus and off
+
+#@sorted_prelim =         # List of IPs that are interesting to us
+
+#  %host_hash
+#  FORMAT:  $host_hash{source}->{dest} = [flows, in-pk, in-bytes, out-pk, out-bytes]
+#       source = ip:port:proto
+#       dest   = ip:port:proto or __total_
+
+#  %existance_hash;         # Map of IPs that are interesting to us.
+
+# Format variables
+use vars qw/$net_1 $net_2 $net_3 $net_4 $net_5 $net_6 $net_7 $net_8 $net_9/;
+
+### ### ### ### ### ###
+# Command Line Arguments
+### ### ### ### ### ###
+
+use vars qw/$sort $tempdir $agg_lim $limit $display_lim $stdin $csv $trash_off 
+            $trash_on $segregate $persons $csv_hostnames $mcast_seg $no_strict_grouping $src_zero_hack
+            $help $hundred_hack_var $debug $csv_append $tag_str $flow_report $disable_dns/;
+
+#make a copy so that we can trash @ARGV
+my @command_args = @ARGV;
+
+GetOptions(
+    "ports", \$ports,
+    "sort=s", \$sort, "s=s", \$sort,
+    "tempdir=s", \$tempdir, "t=s", \$tempdir,
+    "agg-lim=i", \$agg_lim, "a=i", \$agg_lim,
+    "limit=i", \$limit, "l=i", \$limit,
+    "peers-display=i", \$display_lim, "p=i", \$display_lim,
+    "stdin", \$stdin,
+    "csv=s", \$csv,
+    "trash-off", \$trash_off,
+    "trash-on", \$trash_on,
+    "segregate", \$segregate,
+    "persons=s", \$persons,
+    "csv-append", \$csv_append,
+    "csv-hostnames", \$csv_hostnames,
+    "mcast-seg", \$mcast_seg,
+    "no-strict-grouping", \$no_strict_grouping,
+    "help|h", \$help,
+    "hundred-hack=s", \$hundred_hack_var,
+    "ports-file=s", \$ports_file,
+    "debug|g",  \$debug,
+    "hostnames", \$host_names,
+    "tag-str=s", \$tag_str, 
+    "flowdir=s", \$flowdir, "f=s", \$flowdir,
+    "src-zero-hack", \$src_zero_hack,
+    "flow-report", \$flow_report,
+    "disable-dns", \$disable_dns
+          );
+
+&usage() if (defined $help);
+
+### ### ### ### ### ###
+# Default Values
+### ### ### ### ### ###
+$sort    = $sort            || 'byoctets';
+$agg_lim = $agg_lim         || 4;
+$display_lim = $display_lim || 4;
+$limit   = $limit           || 10;
+$host_names = $host_names   || 0;
+
+$=       = 30;      # sets the number of lines per page
+$^L      = "\n";    # seemnigly undocumented hack to not print page separator ^L
+
+# So we use the name we were invoked with to choose which command is running.
+if (not defined $ports)
+{
+    $title          = "The Pairs Report:  The Hottest Net Hangouts on Campus and off\n";
+    *wanted         = \&poi_wanted;
+    *sort_host_hash = \&poi_sort_host_hash;
+    *aggregate      = \&poi_aggregate;
+    *print_each     = \&poi_print_each;
+    *print_tail     = \&poi_print_tail;
+    @empty_row      = (0,0,0,0,0);
+    my $ofh = select(STDOUT);
+    $~ = "poi_stdout";
+    $^ = "poi_stdout_top";
+    select($ofh);
+} 
+else
+{
+    $title          = "The Ports Report:  Usage Patterns for High-Usage Hosts.\n";
+    *wanted         = \&pp_wanted;
+    *sort_host_hash = \&pp_sort_host_hash;
+    *aggregate      = \&pp_aggregate;
+    *print_each     = \&pp_print_each;
+    *print_tail     = \&pp_print_tail;
+    @empty_row      = (0,0,0,0,0,0,0);
+    $host_names     = 1;
+    my $ofh = select(STDOUT);
+    $~ = "pp_stdout";
+    $^ = "pp_stdout_top";
+    select($ofh);
+}
+
+#put stdin into a file...cheap but effective
+if ($stdin or (defined $ARGV[0] and  $ARGV[0] =~ /^\s*-?\s*$/) or 
+    not defined $ARGV[0])
+{
+    $debug and print STDERR "ARGV (stdin?): ".(join "#", @ARGV)."\n";
+    $flow_data_names = '-';
+}
+else
+{
+    $debug and print STDERR "ARGV (no stdin): ".(join "#", @ARGV)."\n";
+    $flow_data_names = join " ", @ARGV;
+}
+
+# Print Header info
+&header;
+
+### ### ### ### ### ###
+#Section 1:  Use flow-tools to decide who to investigate
+### ### ### ### ### ###
+
+my $ft_sort_col;
+
+if ($sort eq "byflows")
+{
+	$ft_sort_col = 1;
+}
+elsif ($sort eq "byoctets")
+{
+	$ft_sort_col = 2;
+}
+elsif ($sort eq "bypackets")
+{
+	$ft_sort_col = 3;
+}
+else
+{
+	die "no such sort order!";
+}
+
+print STDERR "Gathering preliminary data\n";
+
+my $time1 = time;
+if (defined $persons)
+{
+    @sorted_prelim = split /,/, $persons;
+}
+else
+{
+    @sorted_prelim = &get_sorted_prelim();
+    unless (scalar @sorted_prelim)
+    {
+        warn "get_sorted_prelim() didn't give us anything!\n";
+    } 
+    else 
+    {
+        $debug and print STDERR "get_sorted_prelim() returned ", scalar(@sorted_prelim), " entries.\n";
+    }
+}
+
+# Trim perliminaries to on campus only
+if (defined $trash_off)
+{
+	@sorted_prelim = grep {is_campus($_)} @sorted_prelim;
+}
+
+# Trim perliminaries to off campus only
+if (defined $trash_on)
+{
+	@sorted_prelim = grep {!is_campus($_)} @sorted_prelim;
+}
+
+# Email top 100 to someone
+if (defined $hundred_hack_var)
+{
+    my @list = @sorted_prelim[0 .. 99];
+    my $hundred_ips = join "\n", @list;
+    `echo "$hundred_ips" | mail -s hundred_hack $hundred_hack_var`;
+}
+
+# Truncate list to limit unless persons were enumerated
+if (not defined $persons)
+{
+	splice(@sorted_prelim,$limit) if (scalar(@sorted_prelim) >= $limit);
+}
+
+# Convert list to hash
+foreach my $host (@sorted_prelim)
+{
+    $existance_hash{$host} = 1;
+}
+
+### ### ### ### ### ###
+#Section 2:  Using the interesting hosts, look through all data
+### ### ### ### ### ###
+
+print STDERR "Processing big data\n";
+my $time2 = time;
+
+my @flow_list = split /\s+/, $flow_data_names;
+my $hitratio = Cflow::find(\&wanted, @flow_list);
+
+print STDERR "Finished reading data ($hitratio)\n";
+
+unless ($counter){
+    die "Cflow::find did not return any data. See error message above if any.\n";
+}
+
+my $time3 = time;
+#print "about to aggregate\n";
+
+# %host_hash populated by wanted()
+&aggregate(\%host_hash, "left"); #if this works I'll freak
+
+#sort according to total
+@sorted_thing = &sort_host_hash;
+@sorted_thing = &ken_sort(\@sorted_thing) unless (defined $no_strict_grouping);
+
+#we may want only on/off campus
+if ((defined $trash_on) or (defined $trash_off) or (defined $segregate))
+{
+    my $two_things = &segregate_campus (\@sorted_thing);
+
+    @sorted_thing = @{$two_things->[0]};
+    #print "\$#sorted_thing ".$#sorted_thing."\n";
+    $division_point = $two_things->[1];
+    #print "division_point $division_point\n";
+}
+
+print STDERR "Finished big sort\n";
+
+### ### ### ### ### ###
+#Section 3: Commence Printing!
+### ### ### ### ### ###
+my $time4 = time;
+
+if (defined $csv and defined $csv_append)
+{
+	system ("touch $csv");
+	system ("chmod 666 $csv");
+        open CSV, ">>$csv" or warn 
+            "Warning: could not open CSV for append! $!\n";
+} 
+elsif (defined $csv)
+{
+    open CSV, ">$csv" or warn 
+        "Warning: could not open CSV for write! $!\n";
+}
+
+$current_flavor = $old_flavor = substr($sorted_thing[0], 0, 4);
+$flavor_total   = &empty_row;
+foreach (@sorted_thing)
+{
+
+    # Demark Multicast section
+    if (defined $mcast_demark and ($_ eq $mcast_demark))
+    {
+        print "\n################\n###MULTICAST####\n\n";
+        $mcast_section_flag = 1;
+    }
+    elsif ( (not defined $mcast_section_flag) and 
+            (defined $mcast_seg) and is_mcast($_))
+    {
+        push @sorted_thing, $_;
+        $mcast_demark = $_ unless defined $mcast_demark;
+        next;
+    }
+
+    # Demark on campus / off campus
+    $division_counter++;
+    #print "division_counter: $division_counter\n";
+    if ($trash_off)
+    {
+        last if ($division_counter >= $division_point);
+    }
+    elsif ($trash_on)
+    {
+        next if ($division_counter < $division_point);
+    }
+    elsif ($segregate)
+    {
+        print "\n################\n###ON  CAMPUS###\n\n" if ($division_counter == 0);
+        print "\n################\n###OFF CAMPUS###\n\n" if ($division_counter == $division_point);
+    }
+    #else just go
+
+    print_each($_);
+
+} #foreach
+
+&print_tail;
+
+if ($csv)
+{
+    close CSV or die "could not write csv! $!\n";
+}
+
+if ($delete_flag == 1)
+{
+    unlink $stdin_file or die "Can't delete tmpfile $stdin_file. $!\n";
+}
+
+print "\nReport generation finished at ".`date`;
+my $time5 = time;
+if ($debug)
+{
+    print STDERR "Step 1 - Flow Tools : ",$time2-$time1," sec.\n";
+    print STDERR "Step 2 - Cflow      : ",$time3-$time2," sec.\n";
+    print STDERR "Step 3 - Aggregrate : ",$time4-$time3," sec.\n";
+    print STDERR "Step 4 - Printing   : ",$time5-$time4," sec.\n";
+    print STDERR "--Total--           : ",$time5-$time1," sec.\n";
+}
+exit;
+
+### ### ### ###
+# subroutines and other good stuff
+### ### ### ###
+
+sub header
+{
+    print $title, "\n";
+    print "Beginning report generation at ".`date`;
+
+    # I bet there is some fancy way of auto-detecting support.  Probably using eval()
+
+#    print "Command: ";
+#    for (my $i = 0; ($i < 10) and ($i <= $#command_args); $i++)
+#    {
+#        print "$command_args[$i] ";
+#    }
+#    print "..." if ($#command_args > 3);
+#    print "\n";
+
+    print "(F Flows) (I- Incoming) (O- Outgoing) (T- Total) (-P Packets) ";
+    print "(-O Octets)\n\"I-O\" means Incoming Octets.  ".
+          "\"*\" means \"not otherwise accounted for\"\n\n"; 
+
+}
+
+#
+#   get_sorted_prelim() - use flow-tools to see who the top n persons are
+#
+sub get_sorted_prelim
+{
+    my $fh;
+    if ($flow_data_names eq "-")
+    {
+        $delete_flag = 1;
+        ($fh,$stdin_file)=File::Temp::tempfile("poi_stdintXXXXXX",
+            DIR=>$tempdir);
+        while (<STDIN>)
+        {
+            print $fh $_;
+        }
+        $flow_data_names = $stdin_file;
+    }
+
+    my @ips;
+
+    if(not defined $flow_report)
+    {
+	    my $flow_stat = "$flow_stat_exe -f11 -S$ft_sort_col <$flow_data_names |";
+	    $debug and print "$flow_stat\n";
+	    open FT_DEST , $flow_stat or 
+		 die "Could not generate destination summary! $!\n";
+	    
+	    while (<FT_DEST>)
+	    {
+		next if /^#/;
+	    
+		my ($ip, undef) = (split (/\s+/, $_))[0];
+		push @ips, $ip;
+
+	    }
+	    
+	    close FT_DEST or die "could not close flow-dest stat thing! $!\n";
+    }
+    else
+    {
+	
+        my ($fr_fh,$fr_name)=File::Temp::tempfile("flow-report-XXXXXX",
+            DIR=>$tempdir);
+        my $sortname = $sort;
+        $sortname =~ s/^by//;
+	print $fr_fh <<mArKeR
+stat-report t1
+  type ip-address
+  output
+    format ascii
+    sort +$sortname
+
+stat-definition foo
+  report t1
+mArKeR
+;
+        close $fr_fh;
+        my $flow_report_cmd = "$flow_report_exe -s$fr_name -Sfoo <$flow_data_names |";
+        open FLOWRPT, $flow_report_cmd or die "could not do flow-report!";
+        while (<FLOWRPT>)
+        {
+            next if /^#/;
+            my $ip = (split (/,/, $_))[0];
+            push @ips, $ip;
+        }
+        unlink $fr_name;
+    }
+    
+    #print "".(join "\n", @ips);
+    #die "meep";
+    return @ips;
+}
+
+#given a list of lex-matching keys and the big hash, aggregate
+sub make_new_hash
+{
+    my $keys_ref = shift;
+    my $hash_ref = shift;
+    my $side = shift;
+    if ($side eq "right")
+    {
+        return &make_new_hash_r($keys_ref, $hash_ref);
+    }
+
+    my @keys = @{$keys_ref};
+    my @sorted_keys = sort { 
+                      sort_sum(($hash_ref->{$b}->{"__total_"}))
+                      <=> 
+                      sort_sum(($hash_ref->{$a}->{"__total_"}))}
+                      @keys;
+
+    my $ip = substr($sorted_keys[0], 0, 4);
+    
+    #$debug and print "make_new_hash($ip)\n";
+
+    my %new_hash;
+
+    #for (my $i = 0; ($i < $agg_lim - 1) and @sorted_keys ; $i++ )
+   # my $i=1;
+
+    for (my $i = 0; ($i < $agg_lim - 1) and @sorted_keys ; $i++ )
+    {
+#[0] because we keep shifting off...we use the *PRUNED* sorted_keys later
+        my $temp_key = shift @sorted_keys;
+
+        $new_hash{$temp_key} =$hash_ref->{$temp_key};
+    }
+
+    
+    my %new_rhs_hash;
+
+    #print "length \@sorted_keys is ZERO\n" if ($#sorted_keys == -1);
+
+    if (scalar(@sorted_keys)) #prime loop IF there are things to be aggregated
+    {
+        $new_hash{$ip} = \%new_rhs_hash;
+    }
+
+    while (@sorted_keys) #we keep shifting 'em off
+    {
+        #[0] because we keep shifting off
+    
+        foreach my $rhs_key (keys %{$hash_ref->{$sorted_keys[0]}})
+        {
+            if (exists $new_hash{$ip}->{$rhs_key})
+            {
+                $new_hash{$ip}->{$rhs_key} = 
+                raw_row_add_2(
+                ($new_hash{$ip}->{$rhs_key}),
+                ($hash_ref->{$sorted_keys[0]}->{$rhs_key}));
+            }
+            else
+            {
+                #print "hash_ref len ".(length $hash_ref->{$sorted_keys[0]}->{$rhs_key})."\n";
+                $new_hash{$ip}->{$rhs_key} = 
+                ( $hash_ref->
+                {$sorted_keys[0]}->{$rhs_key});
+            }
+        }
+        shift @sorted_keys;
+    } #while sorted_keys
+
+    return \%new_hash;
+}
+
+#very similar to above...a real programmer would have done this differently
+sub make_new_hash_r
+{
+    my $keys_ref = shift;
+    my $hash_ref = shift;
+    
+    #print "length \@sorted_keys is ZERO\n" if ($#sorted_keys == -1);
+
+    #my $ip = substr($keys[0], 0, 4);
+    #if (scalar(@keys)) #prime loop IF there are things to be aggregated
+    #{
+    #    $new_hash{$ip} = qpack(&empty_row);
+    #}
+
+    my @keys = @{$keys_ref};
+    my %new_hash;
+    foreach my $key (@keys) 
+    {
+        my $ip = substr($key, 0, 4);
+
+        #prime IF there are things to be aggregated
+        unless (defined $new_hash{$ip})
+        {
+            $new_hash{$ip} =&empty_row;
+        }
+
+        #print "about to rhs-agg raw_row_add_2\n";
+        $new_hash{$ip} = raw_row_add_2(($new_hash{$ip}),
+                                 ($hash_ref->{$key}));
+    }
+
+    return \%new_hash;
+}
+
+#
+#   dump_ip(string [,context])
+#       Takes entry from host_hash and makes a human printable IP.
+#       optional context gives a hint on how to print in case of non-tcp/udp
+#
+sub dump_ip
+{
+        my $str = shift;
+        my $context;
+        $context = shift if defined @_;
+        my @list;
+        my @context_list;
+
+	if (defined $context)
+	{
+		#print "Context: ".(join "#", map {ord} split//, $context)."\n";
+		if (length $context == 4)
+		{
+			@context_list = unpack "C4", $context;
+		}
+		else
+		{
+			@context_list = unpack "C4SC", $context;
+		}
+	}
+
+        #print "context: ".(dump_ip($context)) if defined $context;
+        #print "dumpip with ".(join "#", map {ord} split//, $str).", ".
+              #(join "#", map {ord} split//, $context)."\n";
+        #print "Dumping ip ".(join "#", map {ord} (split //, $str))."\n";
+        if (length $str == 4)
+        {
+                @list = unpack "C4", $str;
+                return "$list[0].$list[1].$list[2].$list[3]:*";
+        }
+        elsif (length $str == 7)
+        {
+                @list = unpack "C4SC", $str;
+                if ($list[4] == 0)
+                {
+                        #print "list[4] == 0\n";
+                        if (((defined $context) and (length $context == 7)) and
+			   (($context_list[5]!=6) and ($context_list[5]!=17)))
+                        {
+                                return
+                                "$list[0].$list[1].$list[2].$list[3]#$list[5]";
+                        }
+                        elsif (((defined $context) and (length $context == 7)) 
+			      and ($context_list[5] == 1))
+                        {
+                                return "$list[0].$list[1].$list[2].$list[3]x".
+                                sprintf("%x", $list[4]);
+                        }
+                        elsif ($list[4] == 0)
+			{
+                                "$list[0].$list[1].$list[2].$list[3]#$list[5]";
+			}
+			else
+                        {
+                                return
+                                "$list[0].$list[1].$list[2].$list[3]:$list[4]";
+                        }
+                }
+                else
+                {
+                        if ((defined $context) and (length $context == 7) and 
+			   ($context_list[5] == 1))
+                        {
+                                return "$list[0].$list[1].$list[2].$list[3]x".
+                                sprintf("%x", $list[4]);
+                        }
+                        else
+                        {
+                                #print "context ".(ord $context_list[5])."\n";
+                                return "$list[0].$list[1].$list[2].$list[3]:".
+                                       "$list[4]";
+                        }
+                }
+        }
+        elsif ($str eq "__total_")
+        {
+                return "TOTAL:";
+        }
+        else
+        {
+                print "WEIRD BYTES in dump_ip\n";
+                print "".(join "#", map {oct} (split //, $str))."\n";
+        }
+}
+
+#helpful for debugging
+sub dump_host_hash
+{
+	print "dumping host_hash\n";
+	foreach my $key (keys %host_hash)
+	{
+		print "key: ".dump_ip($key)."\n";
+		foreach my $subkey (keys %{$host_hash{$key}})
+		{
+			if (length $subkey == 4)
+			{
+				my ($one, $two) = unpack("SS", $subkey);
+				print "subkey: $one $two\n";
+			}
+			else
+			{
+				print "!4 subkey: $subkey\n";
+			}
+		}
+	}
+	print "host_hash dump complete\n";
+}
+
+sub pack_ip
+{
+    my $str = shift;
+    my @list = split /[.:]/, $str;
+    if ($list[4] eq "*")
+    {
+        return pack "C4", @list[0 .. 3];
+    }
+    else
+    {
+        return pack "C4S", @list;
+    }
+}
+
+#
+#   raw_row_add([],[]) - Columwise sum of values in array1 to array2
+#       Assumes dimension of 2nd array.
+#
+sub raw_row_add 
+{
+    my $r1 = shift;
+    my $r2 = shift;
+    for (my $i = 0; $i <= $#{$r2}; $i++)
+    {
+        $r1->[$i] += $r2->[$i];
+    }
+}
+
+#
+# raw_row_add_2([],[])
+#   Returns reference to array of columnwise sum of two arrays
+#   Assumes dimension of array1
+#
+sub raw_row_add_2
+{
+    my $r1 = shift;
+    my $r2 = shift;
+    my $retval = [];
+    foreach (0 .. $#{$r1})
+    {
+        $retval->[$_] = $r1->[$_] + $r2->[$_];
+    }
+    return $retval;
+}
+
+#
+# row_add(\%hash,$peer1,$peer2,\@list)
+#      Does a column-wise sum :
+#           @{$hash->{$peer1}->{$peer2}}
+#         + @list
+#       -------------------------------
+#           fun!
+#
+#       Also keeps a total under $hash->{$peer1}->{__total_}
+#
+sub row_add
+{
+	my ($hash_ref, $peer1_str, $peer2_str, $list_ref) = @_;
+
+    my %peer_hash; #often added
+
+    if (not exists $hash_ref->{$peer1_str})
+    {
+        $peer_hash{"__total_"} = &empty_row;
+        $hash_ref->{$peer1_str} = \%peer_hash;
+    }
+
+    if (not exists $hash_ref->{$peer1_str}->{$peer2_str})
+    {
+        $hash_ref->{$peer1_str}->{$peer2_str} = &empty_row;
+    }
+
+    # Add each column in @$list_ref to hash entry for peer1 -> peer2
+    # and add to total for peer1
+    $hash_ref->{$peer1_str}->{$peer2_str} = (raw_row_add_2(
+    ($hash_ref->{$peer1_str}->{$peer2_str}), $list_ref));
+
+    $hash_ref->{$peer1_str}->{"__total_"} = (raw_row_add_2(
+    ($hash_ref->{$peer1_str}->{"__total_"}), $list_ref));
+}
+
+sub nf #nice format -- pretty print big numbers with suffixes below...
+       #Not set up for negative numbers
+{
+
+    my $num = shift;
+    my $digits = shift;
+    my $k = (2**10)*1.0;
+    $digits--; #leave room for thingie
+    my $divisions = 0;
+    my @suffix_names = ("", "K", "M", "G", "T", "P");
+    my $negative_flag = 0;
+
+    if ($num < 0.0)
+    {
+	return "?";
+    }
+    elsif ($num == 0.0)
+    {
+        return "0";
+    }
+
+    my $victim = $num;
+    while (((int (log($victim)/log(10))+1) > $digits))
+    {
+        $victim /= $k;
+        $divisions++;
+    }
+
+    my $sigdigs;
+
+    if ($victim =~ /^0/)
+    {
+        $sigdigs = 0;
+    }
+    elsif ($victim !~ /\./)
+    {
+        $sigdigs = length $victim;
+    }
+    else
+    {
+        $sigdigs = length ((split /\./, $victim)[0]);
+    }
+
+    my $after = $digits - $sigdigs - 1; #-1 for .
+
+    if (($sigdigs == 0) and ($after <= 0))
+    {
+        #don't use such a small field next time!
+        return "0";
+    }
+
+    #print "num: $num\n";
+    #print "divisions: $divisions\n";
+    #print "victim: $victim\n";
+    #print "digits: $digits\n";
+    #print "sigdigs: $sigdigs\n";
+    #print "after: $after\n";
+    #print "--------\n";
+
+    my $result;
+    my $format;
+    if ($after <= 0) #-1 
+    {
+        $format = "%".$sigdigs.".0f";
+        #print "elected format 1 $format\n";
+    }
+    else #includes the case of sigdigs being 0
+    {
+        $format = "%".$sigdigs.".".$after."f";
+    }
+
+    $result = sprintf ($format, $victim);
+
+    $result =~ s/\.0*$//;
+    #$result =~ s/\.$//;
+    $result =~ s/^0//;
+    $result .= $suffix_names[$divisions];
+
+    return $result;
+}
+
+sub segregate_campus
+{
+    my $list_ref = shift;
+    my @campus;
+    my @off_campus;
+    foreach my $ip (@{$list_ref})
+    {
+        my $ip_string = &dump_ip($ip);
+        $ip_string =~ s/[:#].*$//;
+        if (is_campus($ip_string))
+        {
+            #print "$ip_string is campus\n";
+            push @campus, $ip;
+        }
+        else
+        {
+            #print "$ip_string is NOT campus\n";
+            push @off_campus, $ip;
+        }
+    }
+    my $boundary = scalar(@campus);
+    push @campus, @off_campus;
+    return [\@campus, $boundary];
+}
+
+sub prune_flavor
+{
+    my $flavor = shift;
+    #print "pruning $flavor\n";
+    my $arr_ref = shift;
+    my @retval_1;
+    my @retval_2;
+    while (scalar @{$arr_ref})
+    {
+        my $candidate = shift @{$arr_ref};
+        #print &dump_ip($candidate)." is candidate\n";
+        if (substr($candidate,0,4) eq $flavor)
+        {
+            #print "flavor match!\n";
+            push @retval_1, $candidate;
+        }
+        else
+        {
+            #print "NO flavor match\n";
+            push @retval_2, $candidate;
+        }
+    }
+    return [\@retval_1,\@retval_2];
+}
+
+sub ken_sort
+{
+    #print "Ken sorting...\n";
+    my $arr_ref = shift;
+    my @retval;
+    while ($arr_ref and scalar @{$arr_ref})
+    {
+        #print "ken sort has:".$#$arr_ref."\n";
+        my $flavor = substr((@{$arr_ref})[0], 0, 4);
+        #print "current flavor ".&dump_ip($flavor)."\n";
+        my $nast_ref = &prune_flavor($flavor, $arr_ref);
+        my ($r1,$r2) = @{$nast_ref};
+        $arr_ref = $r2;
+        push @retval, @{$r1};
+    }
+    return @retval;
+}
+
+sub host_trans
+{
+    my $net_1 = shift;
+    $net_1 =~ /(.*)([:#])(.*)/;
+    my ($clean_ip, $sep, $tail) = ($1,$2,$3);
+    #my $hostname = `$ip_to_host_exe $clean_ip`;
+    #chomp $hostname;
+    #if (($hostname eq "") or ($hostname eq "\n"))
+    #{
+    #        $hostname = $clean_ip;
+    #}
+
+    my $hostname = get_hostname($clean_ip);
+
+    $hostname .= "$sep$tail";
+    return $hostname;
+}
+
+
+#
+#   get_hostname(ip_address) - Returns the hostname or the IP address if
+#           none is found.  Caches entries.  Trims off domain name.
+#
+sub get_hostname 
+{
+    my $ip = shift;
+	return $ip if (defined $disable_dns); #bypass the whole thing
+    # Check for Cached Entry
+    return $local_dns{$ip} if defined $local_dns{$ip};
+
+    my $hostname = gethostbyaddr(inet_aton($ip), AF_INET);
+    $hostname =~ s/\Q.$domain\E$//i if defined $hostname;
+    $local_dns{$ip} = $hostname || $ip;
+    
+    return $local_dns{$ip};
+}
+
+#
+#   usage() - Autopodulatemebaby
+#
+sub usage
+{
+    print "\n";
+#    print `pod2text $0`;
+    my $pod2text = new Pod::Text;
+    $pod2text->parse_from_file($0);
+    undef $pod2text;
+    print "\n";
+    exit;
+}
+
+sub is_mcast
+{
+    #224.2.177.155
+    my $ip = shift;
+    $ip = dump_ip($ip);
+    $ip =~ s/[:#].*$//;
+    #print "checking #$ip#\n";
+    if ((NetAddr::IP->new('224.0.0.0/4'))->
+           contains(NetAddr::IP->new($ip)))
+    {
+        #print "mcast\n";
+        return 1;
+    }
+
+    #print "NOT mcast\n";
+    return undef;
+}
+
+sub sort_sum
+{
+    my $ref = shift;
+    if ($sort eq "byflows")
+    {
+        return $ref->[0];
+    }
+    elsif ($sort eq "byoctets")
+    {
+        return $ref->[2] + $ref->[4];
+    }
+    elsif ($sort eq "bypackets")
+    {
+        return $ref->[1] + $ref->[3];
+    }
+    else { die "WEIRD SORT ORDER";}
+}
+
+# package FlowLogs;
+#Utilities for generating reports from flow logs collected at UCB
+#Robert Wariua , UCB CNS
+#Hacked by Mike Hunter 13 Nov 2002 (UCB CNS)
+#Hacked by Max Baker 06 Jun 2003 (UCSC NTS)
+
+sub is_campus
+{
+    my $ip = shift;
+
+    if ( grep(/^\Q$ip\E$/,@Net_force_off_campus))
+    {
+        return 0;
+    }
+
+    my @nets = map {NetAddr::IP->new($_)} @Nets;
+    foreach my $net (@nets)
+    {
+        if ($net->contains(NetAddr::IP->new($ip)))
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+sub get_sort_col_num
+{
+    my ($name, $format) = @_;
+
+    warn "get_sort_col_num underspecification!" unless $format;
+    my $fs_sort_hash_ref = $fs_sort_uber_hash{$format};
+
+    return $fs_sort_hash_ref->{$name};
+}
+
+# /FlowLogs
+
+sub empty_row
+{
+    # make a copy
+    my @empty_row = @empty_row;
+    return \@empty_row;
+}
+
+### ### ### ### ### ###
+# Executable Specific Subroutines
+### ### ### ### ### ###
+
+### ### ### ### ### ###
+# people-of-interest
+### ### ### ### ### ###
+
+#  aggregate({},$) - complicated stuff to do lumping.  uses a lex sort
+sub poi_aggregate
+{
+    my $hash_ref = shift;
+    my $side = shift; #left or right side?
+
+    my @lex_sort = sort {$a cmp $b} (keys %{$hash_ref}); #lex sort
+
+    my $old_ip = substr ($lex_sort[0], 0, 4); 
+    my @one_flavor;
+    my @result_hashrefs;
+    push @one_flavor, $lex_sort[0];
+    shift @lex_sort;
+
+    while (@lex_sort)
+    #foreach (@lex_sort)
+    {
+        #find all ip matches
+        if ( substr($lex_sort[0], 0, 4) eq $old_ip)
+        {
+            push @one_flavor, (shift @lex_sort);
+        }
+        else #new
+        {
+            #print "\$#one_flavor ".$#one_flavor.", calling...\n";
+            #make a hash with aggregated ports
+            if ( ($#one_flavor + 1) >= $agg_lim ) #agg
+            {
+                push @result_hashrefs, 
+                     &make_new_hash(\@one_flavor, 
+                     $hash_ref, $side);    
+                foreach my $key (@one_flavor)
+                {
+                    delete $hash_ref->{$key};
+                }
+            }
+            @one_flavor = (shift @lex_sort); #start fresh
+            $old_ip = substr( $one_flavor[0], 0, 4);
+        }
+    }
+
+    #stragglers:
+    if ( ($#one_flavor + 1) >= $agg_lim ) #agg
+    {
+        push @result_hashrefs, 
+             &make_new_hash(\@one_flavor, $hash_ref, $side);
+        foreach my $key (@one_flavor)
+        {
+            delete $hash_ref->{$key};
+        }
+    }
+
+    #copy all new mappings into big hash_ref
+    foreach my $href (@result_hashrefs)
+    {
+        foreach my $key (keys %{$href})
+        {
+            $hash_ref->{$key} = $href->{$key};
+        }
+    }
+}
+
+# poi_wanted() - Callback for Cflow::find to do something with flow data.
+sub poi_wanted
+{
+    $counter++;
+
+    my $source_string = substr($Cflow::raw, 8, 4).substr($Cflow::raw, 21, 1).
+                        substr($Cflow::raw, 20,1).(pack "C", $Cflow::protocol);
+    my $dest_string = substr($Cflow::raw, 12, 4).substr($Cflow::raw, 23, 1).
+                      substr($Cflow::raw, 22, 1).(pack "C", $Cflow::protocol);
+
+    #ip:host is packed, put in hash according to directionality
+    #format:  flows in-pk in-oc out-pk out-oc total-pk total-oc
+
+	if (defined $src_zero_hack)
+	{
+		my $zero = pack('x4');
+		return 0 if ($zero eq substr($source_string, 0, 4));
+	}
+
+    my $interesting = 0;
+    if ( exists $existance_hash{$Cflow::dstip})
+    {
+#        print "poi_wanted() $Cflow::pkts pkts $Cflow::bytes bytes\n";
+        row_add(\%host_hash, $dest_string, $source_string, 
+            [1, $Cflow::pkts, $Cflow::bytes, 0, 0]);
+        $interesting++;
+    }
+
+    if ( exists $existance_hash{$Cflow::srcip})
+    {
+        row_add(\%host_hash, $source_string, $dest_string,
+            [1, 0, 0, $Cflow::pkts, $Cflow::bytes]);
+        $interesting++;
+    }
+    return $interesting;
+}
+
+#sort according to total
+sub poi_sort_host_hash 
+{
+    my @sorted_thing = sort {sort_sum(($host_hash{$b}->{"__total_"})) <=> 
+                             sort_sum(($host_hash{$a}->{"__total_"})) } 
+                            (keys %host_hash);
+    return @sorted_thing;
+}
+
+sub poi_print_each 
+{
+    my $host_hash_key = shift;
+    $old_flavor = $current_flavor;
+    $current_flavor = substr($host_hash_key, 0, 4);
+
+    # End of Catagory : print out a total
+    if ($old_flavor ne $current_flavor)
+    {
+        #that is, if we're not about to skip an mcast or something
+        if (defined $mcast_section_flag and is_mcast($old_flavor) or 
+            ((not defined $mcast_section_flag) and 
+              not is_mcast($old_flavor)))
+        {
+            ($net_1) = split /[:#]/, &dump_ip($old_flavor);
+            $net_2 = "TOTAL:";
+            ($net_3,$net_4,$net_5,$net_6,$net_7) = 
+            @{$flavor_total};
+            $net_8 = $net_4 + $net_6;
+            $net_9 = $net_5 + $net_7;
+            write STDOUT;
+            print "\n";
+            $flavor_total = &empty_row;
+            $- --; #rewind to account for the print "\n"
+            if ($- < ($display_lim)*($agg_lim+1))
+            {
+                $- = 0; #hopefully force new page
+            }
+        }
+    }
+    my $totals = ($host_hash{$host_hash_key}->{"__total_"});
+    #print "calling raw_row_add in main, flavor_total #$flavor_total# totals #$totals#\n";
+    &raw_row_add($flavor_total, $totals);
+    
+    &aggregate($host_hash{$host_hash_key}, "right"); #it works!
+    my @mini_sort = sort {sort_sum(($host_hash{$host_hash_key}->{$b})) <=> 
+                          sort_sum(($host_hash{$host_hash_key}->{$a}))} 
+                    (keys %{$host_hash{$host_hash_key}});
+
+    my $local_total = &empty_row;
+
+    my $temp_ = $host_hash_key;
+    for (my $i = 0; ($i < $display_lim) and ($i <= $#mini_sort); $i++)
+    {
+        next if ($mini_sort[$i] eq "__total_");
+
+        $net_1 = dump_ip($temp_, $mini_sort[$i]);
+        $net_2 = dump_ip($mini_sort[$i], $temp_);
+
+
+        ($net_3,$net_4,$net_5,$net_6,$net_7) = 
+            @{($host_hash{$host_hash_key}->{$mini_sort[$i]})};
+        $net_8 = $net_4 + $net_6;
+        $net_9 = $net_5 + $net_7;
+
+        &raw_row_add($local_total, 
+                     ($host_hash{$host_hash_key}->{$mini_sort[$i]}));
+
+        write STDOUT;
+        if ($csv)
+        {
+            print CSV "$net_1,";
+            if (defined $csv_hostnames)
+            {
+                print CSV &host_trans($net_1);
+                print CSV ",";
+            }
+
+            print CSV "$net_2,";
+
+            if (defined $csv_hostnames)
+            {
+                print CSV &host_trans($net_2);
+                print CSV ",";
+            }
+
+            print CSV "$net_3,$net_4,$net_5,$net_6,".
+                      "$net_7,$net_8,$net_9\n";
+        }
+    }
+
+    #print out others if not all zero
+
+    my @others;
+    my $flag = 0;
+
+    foreach my $num (0 .. $#{$totals} )
+    {
+        $others[$num] = $totals->[$num] - $local_total->[$num];
+        $flag += $others[$num];
+    }
+
+    if ($flag != 0)
+    {
+        $net_2 = "*:*";
+
+        ($net_3,$net_4,$net_5,$net_6,$net_7)= @others;
+        $net_8 = $net_4 + $net_6;
+        $net_9 = $net_5 + $net_7;
+        write STDOUT;
+
+        if ($csv)
+        {
+            print CSV "$net_1,";
+            if (defined $csv_hostnames)
+            {
+                print CSV &host_trans($net_1);
+                print CSV ",";
+            }
+
+            print CSV "$net_2,";
+
+            if (defined $csv_hostnames)
+            {
+                print CSV &host_trans($net_2);
+                print CSV ",";
+            }
+
+            print CSV "$net_3,$net_4,$net_5,$net_6,".
+                  "$net_7,$net_8,$net_9\n";
+        }
+    } #if 
+}
+
+sub poi_print_tail
+{
+    # Print out last total since we exited the loop
+    ($net_1) = split /[:#]/, &dump_ip($current_flavor); #old_flavor is not updated
+    $net_2 = "TOTAL:";
+    ($net_3,$net_4,$net_5,$net_6,$net_7)= @{$flavor_total};
+    $net_8 = $net_4 + $net_6;
+    $net_9 = $net_5 + $net_7;
+    write STDOUT;
+}
+
+
+format poi_stdout =
+@<<<<<<<<<<<<<<<<<<<< @<<<<<<<<<<<<<<<<<<<< @>> @>>> @>>>> @>>> @>>>> @>>> @>>>>
+$net_1,$net_2,&nf($net_3,3),&nf($net_4,4),&nf($net_5,5),&nf($net_6,4),&nf($net_7,5),&nf($net_8,4),&nf($net_9,5)
+.
+
+format poi_stdout_top =
+(Page @>>>)
+      $%
+Host                  Peer                    F  I-P   I-O  O-P   O-O  T-P   T-O
+.
+
+### ### ### ### ### ###
+# port-peers
+### ### ### ### ### ###
+sub pp_wanted
+{
+    $counter++;
+
+	my $source_string = substr($Cflow::raw, 8, 4);
+
+	if (defined $src_zero_hack)
+	{
+		my $zero = pack('x4');
+		return 0 if ($source_string eq $zero);
+	}
+	my $dest_string = substr($Cflow::raw, 12, 4);
+
+	#ip:host is packed, put in hash according to directionality
+	#format:  flows in-pk in-oc out-pk out-oc total-pk total-oc
+
+	my ($prt1, $prt2);
+
+	if ($Cflow::srcport > $Cflow::dstport)
+	{
+		$prt1 = $Cflow::dstport;
+		$prt2 = $Cflow::srcport;
+	}
+	else
+	{
+		$prt1 = $Cflow::srcport;
+		$prt2 = $Cflow::dstport;
+	}
+
+    my $interesting = 0;
+	if ( exists $existance_hash{$Cflow::dstip})
+	{
+		&row_add(\%host_hash, $dest_string, (pack "SS",
+			 $prt1,$prt2),
+			[1, $Cflow::pkts, $Cflow::bytes, 0, 0, $Cflow::pkts, $Cflow::bytes]);
+        $interesting++;
+	}
+
+	if ( exists $existance_hash{$Cflow::srcip})
+	{
+		&row_add(\%host_hash, $source_string, (pack "SS",
+			 $prt1,$prt2),
+	 	        [1, 0, 0, $Cflow::pkts, $Cflow::bytes, $Cflow::pkts, $Cflow::bytes]);
+        $interesting++;
+	}
+
+    return $interesting;
+}
+
+sub pp_sort_col
+{
+    my $sort_col;
+
+    if ($sort eq "byoctets")
+    {
+            $sort_col = 6;
+    }
+    elsif ($sort eq "bypackets")
+    {
+            $sort_col = 5;
+    }
+    elsif ($sort eq "byflows")
+    {
+            $sort_col = 0;
+    }
+    else {die "WEIRD SORT ORDER!";}
+
+    return $sort_col;
+}
+
+sub pp_sort_host_hash
+{
+    my $sort_col = &pp_sort_col;
+
+    my @sorted_thing = sort {$host_hash{$b}->{"__total_"}->[$sort_col] <=> 
+                             $host_hash{$a}->{"__total_"}->[$sort_col] } 
+                            (keys %host_hash);
+    return @sorted_thing;
+}
+
+sub pp_aggregate
+{
+	my $hash_ref = shift;
+	my @ip_keys = keys %{$hash_ref};
+
+	foreach my $ip (@ip_keys)
+	{	
+                #print "starting hash->ip : ".&dump_ip($ip)."\n";
+                #foreach my $key (keys %{$hash_ref->{$ip}})
+                #{
+                        #print "".&dump_dir($key)." ".$hash_ref->{$ip}
+                              #->{$key}->[0]."\n";
+                #}
+
+		my @result_hashrefs;
+		my @dir_keys;
+		my @right_flavor;
+
+		my @rsort_dkeys = sort {substr($a, 2, 2) cmp substr($b, 2, 2)}
+		                  keys %{$hash_ref->{$ip}};
+
+		@rsort_dkeys = grep {!/^__total_$/} @rsort_dkeys; #total evil
+
+		my $oldk = substr($rsort_dkeys[0],2,2);
+		while (@rsort_dkeys)
+		{
+$debug and print "whileing, rsort_dkeys[0] is ".(join " ", unpack("SS", $rsort_dkeys[0])).", dump_host_hash:\n";
+$debug and dump_host_hash();
+			if ( substr($rsort_dkeys[0],2,2) eq $oldk)
+			{
+$debug and print "pushing ".(join " ", unpack("SS", $rsort_dkeys[0]))."\n";
+				push @right_flavor, (shift @rsort_dkeys);
+			}
+			else #new
+			{
+				if ( ($#right_flavor + 1) >= $agg_lim ) #agg
+				{
+					my $newstr = 
+					(pack "CC", 0, 0).
+					substr($right_flavor[0], 2, 2);
+					$hash_ref->{$ip}->{$newstr} =
+					[0,0,0,0,0,0,0] if (not exists
+					$hash_ref->{$ip}->{$newstr});
+#ugly ugly.  The only reason it would exist is icmp code, which we lump in.
+					foreach my $key (@right_flavor)
+					{
+						&raw_row_add( 
+						$hash_ref->{$ip}->{$newstr},
+						$hash_ref->{$ip}->{$key});
+$debug and print "About1 to delete ".((length $key == 4) ? (join " ", unpack ("SS", $key)) : $key)."\n";
+						delete $hash_ref->{$ip}->{$key};
+					}
+				}
+				else
+				{
+					#let them stay
+				}
+				@right_flavor=(shift @rsort_dkeys); #start fresh
+				$oldk = substr($right_flavor[0],2,2);
+			}
+		}
+
+#STRAGGLERS!!!
+		if ( ($#right_flavor + 1) >= $agg_lim ) #agg
+		{
+			my $newstr = 
+			(pack "CC", 0, 0).
+			substr($right_flavor[0], 2, 2);
+			$hash_ref->{$ip}->{$newstr} =
+			[0,0,0,0,0,0,0] if (not exists
+			$hash_ref->{$ip}->{$newstr});
+#ugly ugly.  The only reason it would exist is icmp code, which we lump in.
+			foreach my $key (@right_flavor)
+			{
+				&raw_row_add( 
+				$hash_ref->{$ip}->{$newstr},
+				$hash_ref->{$ip}->{$key});
+$debug and print "About1.5 to delete ".((length $key == 4) ? (join " ", unpack ("SS", $key)) : $key)."\n";
+				delete $hash_ref->{$ip}->{$key};
+			}
+		}
+
+#----------------------------------------------------------------------left
+
+		my @lsort_dkeys = sort {substr($a, 0, 2) cmp substr($b, 0, 2)}
+		                  keys %{$hash_ref->{$ip}};
+
+		@lsort_dkeys = grep {!/^__total_$/} @lsort_dkeys;
+
+		#print "".(scalar @lsort_dkeys)." lsort_dkeys\n";
+		my @left_flavor;
+
+		my $setk = 1;
+		$oldk = substr($lsort_dkeys[0], 0, 2);
+		while (@lsort_dkeys)
+		{
+			#print "lsort ".&dump_dir($lsort_dkeys[0])."\n";
+			#ignore the ones already aggregated
+			if ( substr($lsort_dkeys[0],0,2) eq (pack "CC", 0,0))
+			{
+				#print "ignoring ".&dump_dir(shift @lsort_dkeys).
+				      #"\n";
+				shift @lsort_dkeys;
+				next;
+			}
+			elsif ($setk == 1) #first non-aggregated entry?
+			{
+				$oldk = substr($lsort_dkeys[0],0,2);
+				$setk = 0;
+				#print "past 0's\n";
+			}
+
+			if ( substr($lsort_dkeys[0],0,2) eq $oldk)
+			{
+				#print "l-pushing ".
+				      #&dump_dir($lsort_dkeys[0])."\n";
+				push @left_flavor, (shift @lsort_dkeys);
+				#print "".(scalar @left_flavor).
+				      #" in left_flavor after push\n";
+			}
+			else #new
+			{
+				if ( ($#left_flavor + 1) >= $agg_lim ) #agg
+				{
+			#print "l-agging ".&dump_dir($left_flavor[0])."\n";
+					my $newstr = 
+					substr($left_flavor[0], 0, 2).
+					(pack "CC", 0, 0);
+					$hash_ref->{$ip}->{$newstr} =
+					[0,0,0,0,0,0,0] if (not exists
+					$hash_ref->{$ip}->{$newstr});
+#ugly ugly.  The only reason it would exist is icmp code, which we lump in.
+					foreach my $key (@left_flavor)
+					{
+						&raw_row_add( 
+						$hash_ref->{$ip}->{$newstr},
+						$hash_ref->{$ip}->{$key});
+$debug and print "About2 to delete ".((length $key == 4) ? (join " ", unpack ("SS", $key)) : $key)."\n";
+						delete $hash_ref->{$ip}->{$key};
+					}
+				#print "".(scalar keys %{$hash_ref->{$ip}}).
+				#"keys remain after lagg and deletion\n";
+				}
+				else
+				{
+					#let them stay
+					#print "new flavor, but < agg lim\n";
+				}
+				@left_flavor = (shift @lsort_dkeys);#start fresh
+				$oldk = substr($left_flavor[0], 0, 2);
+			}
+		}
+		if ( ($#left_flavor + 1) >= $agg_lim ) #STRAGGLERS!!!
+		{
+			#print "l-agging ".&dump_dir($left_flavor[0])."\n";
+			my $newstr = 
+			substr($left_flavor[0], 0, 2).
+			(pack "CC", 0, 0);
+			$hash_ref->{$ip}->{$newstr} =
+			[0,0,0,0,0,0,0] if (not exists
+			$hash_ref->{$ip}->{$newstr});
+#ugly ugly.  The only reason it would exist is icmp code, which we lump in.
+			foreach my $key (@left_flavor)
+			{
+				&raw_row_add( 
+				$hash_ref->{$ip}->{$newstr},
+				$hash_ref->{$ip}->{$key});
+$debug and print "About3 to delete ".((length $key == 4) ? (join " ", unpack ("SS", $key)) : $key)."\n";
+				delete $hash_ref->{$ip}->{$key};
+			}
+			#print "".(scalar keys %{$hash_ref->{$ip}}).
+			#"keys remain after lagg and deletion\n";
+		}
+		#no else!
+
+		#print "hash->ip roundup: ".&dump_ip($ip)."\n";
+		#foreach my $key (keys %{$hash_ref->{$ip}})
+		#{
+			#print "".&dump_dir($key)." ".$hash_ref->{$ip}
+			      #->{$key}->[0]."\n";
+		#}
+	}
+}
+
+sub pp_print_each
+{
+	my $clean_ip = &dump_ip($_);
+	$clean_ip = substr($clean_ip, 0, -2);
+
+	my $hostname = get_hostname($clean_ip);
+    if (length $hostname > 24)
+    {
+        $hostname = "...".substr($hostname, -21);
+    }
+
+	my $totals = $host_hash{$_}->{"__total_"};
+
+    my $sort_col = &pp_sort_col;
+
+	my @mini_sort = sort {$host_hash{$_}->{$b}->[$sort_col] <=> 
+	                      $host_hash{$_}->{$a}->[$sort_col] } 
+	                (keys %{$host_hash{$_}});
+
+	my $local_total = &empty_row;
+
+	for (my $i = 0; ($i < $display_lim) and ($i <= $#mini_sort); $i++)
+	{
+		next if ($mini_sort[$i] eq "__total_");
+
+		$net_1=$hostname;
+
+		$debug and print "srcport-prelookup: ".(unpack "S", substr($mini_sort[$i],0, 2))."\n";
+		$debug and print "dstport-prelookup: ".(unpack "S", substr($mini_sort[$i],2, 2))."\n";
+		my $srcprt = pp_get_port((unpack "S", substr($mini_sort[$i],0, 2)));
+		my $dstprt = pp_get_port((unpack "S", substr($mini_sort[$i],2, 2)));
+		$debug and print "#s#d# #$srcprt#$dstprt#\n";
+
+		$net_2= "$srcprt->$dstprt";
+
+		($net_3,$net_4,$net_5,$net_6,$net_7,$net_8, $net_9)= 
+		@{$host_hash{$_}->{$mini_sort[$i]}};
+		&raw_row_add($local_total, $host_hash{$_}->{$mini_sort[$i]});
+
+		write STDOUT;
+		if (defined $csv)
+		{
+			my $f1;
+			if (defined $tag_str)
+			{
+				$f1 = $tag_str;
+				chomp $f1;
+			}
+			else
+			{
+				$f1 = get_hostname($clean_ip);
+			}
+
+			print CSV "$f1,$clean_ip,$srcprt,$dstprt,".
+			          "$net_3,$net_4,$net_5,$net_6,$net_7,$net_8,".
+			          "$net_9\n";
+		}
+	}
+
+    #print out others if not all zero
+
+	my @others;
+	my $flag = 0;
+
+	foreach my $num (0 .. $#{$totals} )
+	{
+		$others[$num] = $totals->[$num] - $local_total->[$num];
+		$flag += $others[$num];
+	}
+
+	if ($flag != 0)
+	{
+		$net_2 = "Other:";
+
+		($net_3,$net_4,$net_5,$net_6,$net_7,$net_8, $net_9)=  @others;
+		write STDOUT;
+		if (defined $csv)
+		{
+			my $f1;
+			if (defined $tag_str)
+			{
+				$f1 = $tag_str;
+				chomp $f1;
+			}
+			else
+			{
+				$f1 = get_hostname($clean_ip);
+			}
+			print CSV "$f1,$clean_ip,-1,-1,".
+			          "$net_3,$net_4,$net_5,$net_6,$net_7,$net_8,".
+			          "$net_9\n";
+		}
+	}
+
+	print "\n";
+	$- --; #rewind to account for the print "\n"
+
+	#try to avoid orphins
+	#print "- = % $- $= $%\n";
+	if ($- < $display_lim)
+	{
+		$- = 0; #hopefully force new page
+	}
+}
+
+sub pp_print_tail
+{
+
+}
+
+sub pp_get_port
+{
+	if (defined $ports_file and (not defined %ports_db))
+	{
+		#perform lazy init
+		open PORTS, $ports_file or warn "could not open ports file!";
+		while (my $line = <PORTS>)
+		{
+			my ($pnum, $val) = split / +/, $line;
+			chomp $val;
+			$ports_db{$pnum} = $val;
+		}
+	}
+		
+        my $num = shift;
+        return "*" if ($num == 0);
+	if (exists $ports_db{$num})
+	{
+		return "$num/".$ports_db{$num};
+	}
+	else
+	{
+		return $num;
+	}
+}
+
+format pp_stdout =
+@<<<<<<<<<<<<<<<<<<<<<<< @||||||||||||||||| @>> @>>> @>>>> @>>> @>>>> @>>> @>>>>
+$net_1,$net_2,&nf($net_3,3),&nf($net_4,4),&nf($net_5,5),&nf($net_6,4),&nf($net_7,5),&nf($net_8,4),&nf($net_9,5)
+.
+
+format pp_stdout_top =
+(Page @>>>)
+      $%
+Host                         Known Port       F  I-P   I-O  O-P   O-O  T-P   T-O
+.

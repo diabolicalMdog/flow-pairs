@@ -1,0 +1,265 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<title>Ports</title>
+<meta NAME="Creator" CONTENT="Mike Hunter">
+</head>
+<BODY BGCOLOR="#FFFFFF" LINK="#0654CF" ALINK="#6BB8FF" VLINK="#004877">
+<DIV ALIGN="CENTER">
+
+<TABLE BORDER="0" WIDTH="680" CELLSPACING="0" CELLPADDING="10">
+        <TR>
+                <TD ALIGN="CENTER">
+                </TD>
+        </TR>
+        <TR>
+                <TD BGCOLOR="#E6EFF7">          
+
+<h2>Section 1:  Understanding The Data Format</h2>
+
+<p>
+Here is a sample of the comma-separated-values (CSV) form of the data:
+</p>
+
+<pre>
+newsfeed,128.32.206.55,*,119/nntp,518,471877,484982747,95359,41749837,567236,526732584
+newsfeed,128.32.206.55,119/nntp,*,505,67866,6375734,395801,20807220,463667,27182954
+newsfeed,128.32.206.55,433/nnsp,2186,1,4,215,0,0,4,215
+newsfeed,128.32.206.55,-1,-1,4,3,144,7,370,10,514
+</pre>
+
+<p>
+The fields are as follows:<br>
+</p>
+
+<table border="1">
+<tr valign="top">
+	<td class="SM">Hostname (sans "berkeley.edu")</td>
+	<td class="SM">Host IP</td>
+	<td class="SM">Source port(s)</td>
+	<td class="SM">Destination port(s)</td>
+	<td class="SM">Total Flows (connections)</td>
+	<td class="SM">Incoming Packets</td>
+	<td class="SM">Incoming Bytes</td>
+	<td class="SM">Outgoing Packets</td>
+	<td class="SM">Outgoing Bytes</td>
+	<td class="SM">Total Packets</td>
+	<td class="SM">Total Bytes</td>
+</tr>
+<tr>
+	<td class="SM">newsfeed</td>
+	<td class="SM">128.32.206.55</td>
+	<td class="SM">*</td>
+	<td class="SM">119/nntp</td>
+	<td class="SM">518</td>
+	<td class="SM">471877</td>
+	<td class="SM">484982747</td>
+	<td class="SM">95359</td>
+	<td class="SM">41749837</td>
+	<td class="SM">567236</td>
+	<td class="SM">526732584</td>
+</tr>
+</table>
+
+<p>
+Some things to notice:
+</p>
+
+<ul>
+<li>Some ports have an additional text description.  Port 119 corresponds
+to the Network News Transfer Protocol (i.e. Usenet)</li>
+<li>Hosts that end in the given domain ("berkeley.edu") have the name truncated to save
+space</li>
+<li>If the port is "*", that corresponds to "many".  For example, ports of
+<tt>*,119</tt> would indicate that the host contacted many remote machines 
+on port
+119 using many different source ports.  Similarly, an entry of
+<tt>119,*</tt> would indicate traffic from source port 119 to many
+different destination ports</li>
+<li><tt>*</tt> can also correspond to "port 0."  Port 0 is not valid
+for normal (tcp/udp) network communications.  Large amounts of traffic on port
+0 that do not appear to correspond to a normal network pattern could
+indicate invalid traffic used for a denial of service attack against or by
+the system in question</li>
+<li><tt>-1,-1</tt> in the CSV for ports signifies "all traffic not previously
+accounted for" (denoted by "other" in the human readable format)</li>
+<li>The IP will be repeated for the hostname if the hostname could not be
+found.  This may be because of a transient DNS failure, or the host may
+not have a DNS entry (which should be corrected!)  Read section 2 for more 
+details.</li>
+</ul>
+
+<p>
+Here's a look at the same piece of data in human-readable format:
+</p>
+
+<pre>
+(F Flows) (I- Incoming) (O- Outgoing) (T- Total) (-P Packets) (-O Octets)       
+i.e. I-O means Incoming Octets
+
+Host                         Known Port       F  I-P   I-O  O-P   O-O  T-P   T-O
+newsfeed                     *->119/nntp    .5K 461K  463M  93K 39.8M 554K  502M
+newsfeed                     119/nntp->*    .5K  66K 6226K 387K 19.8M 453K 25.9M
+newsfeed                      433->2186       1    4   215    0     0    4   215
+newsfeed                       Other:         4    3   144    7   370   10   514
+</pre>
+
+<p class="SM">
+(Note:  "Octet" is another term for a byte:  8 bits of data.  Octet was
+coined to avoid confusion with systems that called 16 bit words "bytes."
+Non-8-bit-bytes have been relegated to history, but the term octet remains
+popular in networking circles.)
+</p>
+
+<p>
+The same rules apply as for the CSV. version.  The data is reported with
+suffixes as described 
+<a href="http://physics.nist.gov/cuu/Units/binary.html">here</a>.
+</p>
+
+<h2>Section 2:  The Implications</h2>
+
+<p>
+When a host rises to the top of a report, all that can be said is that it
+has used a lot of bandwidth.  That does not always imply that there is a
+problem with the host.  In the example of a departmental web server, it
+should come as a welcome treat to see that many people across the world
+are making use of the information your department is providing.  For
+example, this is the traffic pattern from a departmental mail and web
+server:</p>
+
+<pre>
+Host                         Known Port       F  I-P   I-O  O-P   O-O  T-P   T-O
+example1                     80/http->*     85K  128 41.6K 1.6M 1386M 1.6M 1386M
+example1                     *->25/smtp     17K 443K  382M 298K  231M 741K  612M
+example1                       993->*       32K    0     0 642K  400M 642K  400M
+example1                     *->80/http     88K 1.3M  167M  137  8198 1.3M  167M
+example1                       995->*        8K    0     0 247K  141M 247K  141M
+example1                       *->993       32K 515K 52.1M    0     0 515K 52.1M
+example1                     25/smtp->*     16K 181K 9888K 272K 18.8M 453K 28.5M
+example1                       *->995        9K 191K 11.6M    0     0 191K 11.6M
+example1                    *->53/domain    30K  27K 5206K  29K 2023K  56K 7229K
+example1                       Other:       26K  30K 4021K  40K 5549K  70K 9570K
+</pre>
+
+<p>
+Notice the large number of connections (88,000) coming into port 80, and the
+correspondingly large number of replies (85,000) and bandwidth (1386 MB) 
+from port 80 to various ports.
+</p>
+
+<p>
+However; it is not uncommon for a high-utilization host to be up to no
+good.  Consider the following usage pattern:
+</p>
+
+<pre>
+Host                         Known Port       F  I-P   I-O  O-P   O-O  T-P   T-O
+example2                    1214/kazaa->*    5K  18K 23.2M 2.3M 2480M 2.3M 2504M
+example2                    *->1214/kazaa    9K   2M 1246M  15K  716K   2M 1246M
+example2                       3770->*       46  18K 24.6M    0     0  18K 24.6M
+example2                       3760->*       29  16K 22.3M    0     0  16K 22.3M
+example2                       1646->*       29  14K 19.8M    0     0  14K 19.8M
+example2                       1537->*       27  14K 19.7M    0     0  14K 19.7M
+example2                       3728->*       34  14K 19.6M    0     0  14K 19.6M
+example2                       3008->*       35  12K 17.7M    0     0  12K 17.7M
+example2                       2801->*       23 7.4K 10.6M    7  1096 7.4K 10.6M
+example2                       Other:        4K 196K  257M 230K 17.7M 426K  275M
+</pre>
+
+<p>Or this pattern:</p>
+<pre>
+Host                         Known Port       F  I-P   I-O  O-P   O-O  T-P   T-O
+example3                     4485->7986       5    0     0 719K  922M 719K  922M
+example3                     1265->8111       5    0     0 721K  921M 721K  921M
+example3                     4361->32947      6    0     0 651K  889M 651K  889M
+example3                     2300->33547      6    0     0 655K  889M 655K  889M
+example3                     4639->3190       7    0     0 629K  873M 629K  873M
+example3                     1059->32996      7    0     0 608K  855M 608K  855M
+example3                     3184->32995      6    0     0 606K  855M 606K  855M
+example3                     1160->21184      5    0     0 715K  853M 715K  853M
+example3                     1421->4808      11    0     0 608K  852M 608K  852M
+example3                     *->6667/IRC     18    0     0  161  6623  161  6623
+example3                       Other:        8K  61M 2699M  83M  104G 144M  106G
+</pre>
+
+<p>These are both examples of hosts trafficking in large
+media files.  In the first example, it appears the user has installed kazaa, 
+a peer-to-peer (P2P) file-sharing utility. 
+</p>
+
+<p>In the second example, the server had been hacked.  Systems within academic
+institutions are favorite targets of hackers because they offer high-bandwidth
+connections.  When a hacker exploits a vulnerability in a host, he is not
+usually looking for personal information; it's much more frequently a means of 
+gaining a staging area for serving illicit digital media.  Tools exist to
+easily administer and monitor every action of a compromised remote computer,
+including setting up an FTP server, a peer-to-peer file-sharing node, or
+even to launch a Denial of Service attack.  For more information about
+these sorts of problems, 
+<a href= "http://www.der-keiler.de/Mailing-Lists/securityfocus/incidents/2002-09/0044.html">
+click here</a>.
+Notice the large sizes of the connections between seemingly random port
+numbers.  Peer-to-peer file sharing programs are designed to vary their traffic
+patterns as much as possible to avoid detection.  (Kazaa is often configured
+to use port 80 so as to appear to be a web server).  Once a machine has been
+converted into a file-swapping zombie, the hacker can just sit back and watch
+while the machine does its work.  The traffic patterns of any subsequent
+control commands can be another good sign that a machine has been hacked.
+IRC, or Internet Relay Chat, is one of the most well established forms of
+network chat.  Often times, <!-- I dream of music, of a river that freely flows
+...and it sings a song, sweeter than honey, one everybody knows --> a hacked
+system will interact via the IRC protocol with other machines to receive
+control instructions.  IRC is not in and of itself a sign of a hacked system,
+but it can be a clue if the system is already using a lot of bandwidth.
+</p>
+
+<p>Finally, consider this usage pattern:</p>
+<pre>
+Host                         Known Port       F  I-P   I-O  O-P   O-O  T-P   T-O
+169.229.129.10              *->137/nb-ns     18   18  1404    0     0   18  1404
+169.229.129.10                 *->2048        4    9   462    0     0    9   462
+169.229.129.10              2330->21/ftp      1    4   240    0     0    4   240
+169.229.129.10                1711->445       1    3   144    0     0    3   144
+169.229.129.10                2829->445       1    3   144    0     0    3   144
+169.229.129.10                2928->445       1    3   144    0     0    3   144
+169.229.129.10               1096->1433       1    2    96    0     0    2    96
+169.229.129.10              3259->80/http     1    2    96    0     0    2    96
+169.229.129.10              4769->80/http     1    2    96    0     0    2    96
+169.229.129.10                 Other:         2    4   192    0     0    4   192
+</pre>
+<p>The reports often contain pages of entries similar to this.  No hostname
+could be found, and no outgoing traffic can be observed.  This corresponds
+to a record of a scan towards a non-existent host within a campus subnet from
+a hacker (or a curious, rude computer user) off-campus.  Notice in
+this example the 18 scans to port 137, a Microsoft Windows service that can
+be exploited if the machine has not been patched.  System administrators should
+be aware that each and every machine (and even machines that 
+don't exist!) on his or her network is constantly being scanned for 
+vulnerabilities, so if a machine
+on your network is vulnerable, it is only a matter of time before it will
+be hacked.
+</p>
+<p>Feel free to email
+<a href="mailto:mhunter@ack.berkeley.edu">Mike Hunter</a> if you have any
+questions or comments regarding this document.</p>
+<!-- BEGIN INCLUDE TECHNICAL -->
+<center>
+
+<hr SIZE="1" WIDTH="98%">
+
+<p>
+
+Last revised:
+February 21, 2003<br>
+</p>
+</center>
+</td></tr></table>
+<!-- BEGIN INCLUDE FOOTER1 -->
+<center>
+<p>
+</center>
+<!-- END INCLUDE FOOTER1 -->
+</div>
+</body>
+</html>

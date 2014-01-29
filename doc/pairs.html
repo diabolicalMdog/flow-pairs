@@ -1,0 +1,207 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<title>Pairs</title>
+<meta NAME="Creator" CONTENT="Mike Hunter">
+</head>
+<BODY BGCOLOR="#FFFFFF" LINK="#0654CF" ALINK="#6BB8FF" VLINK="#004877">
+<DIV ALIGN="CENTER">
+<TABLE BORDER="0" WIDTH="680" CELLSPACING="0" CELLPADDING="10">
+        <TR>
+                <TD ALIGN="CENTER">
+                </TD>
+        </TR>
+        <TR>
+                <TD BGCOLOR="#E6EFF7">          
+
+<h2>Introduction</h2>
+
+<p>
+<h2>Section 1:  Understanding The Data Format</h2>
+
+<p>
+Here is a sample of the comma-separated-values (CSV) form of the data:
+</p>
+
+<pre>
+128.32.155.79:2048,217.136.200.35#1,20,34151,2868684,0,0,34151,2868684
+128.32.155.79:2048,200.203.191.38#1,144,2872,241248,0,0,2872,241248
+128.32.155.79:2048,62.233.232.204#1,144,2866,240744,0,0,2866,240744
+128.32.155.79:2048,*:*,4186,8244,844409,0,0,8244,844409
+128.32.155.79#1,217.136.200.35#1,20,0,0,33967,2853228,33967,2853228
+128.32.155.79#1,62.233.232.204#1,144,0,0,2854,239736,2854,239736
+128.32.155.79#1,200.203.191.38#1,144,0,0,2849,239316,2849,239316
+128.32.155.79#1,*:*,4295,0,0,8093,832388,8093,832388
+128.32.155.79:*,213.165.64.100:*,100,332,17822,278,20420,610,38242
+128.32.155.79:*,217.72.192.149:25,28,200,13216,164,12983,364,26199
+128.32.155.79:*,213.144.130.172:*,335,335,24455,0,0,335,24455
+128.32.155.79:*,*:*,3670,10936,803464,5127,381308,16063,1184772
+</pre>
+
+<p>
+The fields are as follows:<br>
+</p>
+
+<table border="1">
+<tr>
+	<td>Host IP and port<sup>[1]</sup></td>
+	<td>Host IP and port<sup>[1]</sup></td>
+	<td>Total Flows<sup>[2]</sup></td>
+	<td>Incoming Packets</td>
+	<td>Incoming Bytes</td>
+	<td>Outgoing Packets</td>
+	<td>Outgoing Bytes</td>
+	<td>Total Packets</td>
+	<td>Total Bytes</td>
+</tr>
+<tr>
+	<td>128.32.155.79:*</td>
+	<td>213.144.130.172:*</td>
+	<td>518</td>
+	<td>471877</td>
+	<td>484982747</td>
+	<td>95359</td>
+	<td>41749837</td>
+	<td>567236</td>
+	<td>526732584</td>
+</tr>
+</table>
+
+<ol>
+<li>The port field may have special meanings.  See below.</li>
+<li>A flow is a group of packets with the same source and destination as seen by
+the router.  Roughly speaking, a flow if a burst of packets from point A to
+point B.  Flows are separated at 15 minutes for accounting purposes.
+</li>
+</ol>
+
+<p>And here is a sample of the "human-readable" format:</p>
+
+<pre>
+Host                  Peer                    F  I-P   I-O  O-P   O-O  T-P   T-O
+128.32.155.79:20      128.3.183.99:*        68K  66M 51.2G  23M  925M  89M 52.1G
+128.32.155.79:20      128.218.214.102:4655    2   22   888   39 45.5K   61 46.4K
+128.32.155.79:20      64.54.98.71:*          24   50  2096   86 43.8K  136 45.9K
+128.32.155.79:20      *:*                    28  129 65.4K  115 27.6K  244   93K
+128.32.155.79:80      132.239.1.232:*        76  25K 1338K  91K  103M 116K  105M
+128.32.155.79:80      193.140.202.64:*      .4K  15K  651K  23K   29M  37K 29.6M
+128.32.155.79:80      134.157.7.9:*          63  13K  541K  24K 28.4M  37K 28.9M
+128.32.155.79:80      *:*                   66K 569K 44.8M 944K 1045M 1.5M 1089M
+128.32.155.79:*       128.3.183.99:*        74K 332K 18.1M 339K 23.5M 671K 41.5M
+128.32.155.79:*       128.135.229.50:*       29  12K  477K  22K 26.1M  34K 26.6M
+128.32.155.79:*       64.156.215.5:25        2K  19K 1045K  25K 17.4M  43K 18.4M
+128.32.155.79:*       *:*                   90K 1.1M 83.6M 1.2M  610M 2.3M  694M
+128.32.155.79:25      128.3.41.61:*         .2K  22K 25.1M 8.8K  418K  31K 25.5M
+128.32.155.79:25      128.218.114.108:*      16  12K 14.4M   2K 83.1K  14K 14.5M
+128.32.155.79:25      131.243.248.26:*      .1K  11K 12.1M 2.2K  130K  13K 12.3M
+128.32.155.79:25      *:*                   37K 500K  358M 339K 28.7M 839K  386M
+128.32.155.79         TOTAL:                .3M  69M 51.8G  26M 2837M  95M 54.5G
+</pre>
+
+The human-readable format's columns mirror those of the CSV version.  For
+readability, they are reported in scaled units as described
+<a href="http://physics.nist.gov/cuu/Units/binary.html">here</a>.
+<p>
+Usually, the "Host IP and port" field lists an IP address, followed by a
+"<tt>:</tt>", followed by a port number.  This indicates one endpoint of the
+network conversation.  There are also several special meanings that can be
+assigned to the port number section.  An entry of "<tt>:*</tt>" indicates
+"all ports not otherwise listed".  For example, consider the following:
+<pre>
+128.32.155.79:80      132.239.1.232:*        76  25K 1338K  91K  103M 116K  105M
+</pre>
+<p>
+In this case, there were several connections from
+<tt>132.239.1.232</tt> from varying ports to port 80 (used by web 
+servers)
+of <tt>128.32.155.79</tt>.  The various flows were aggregated to form this 
+single
+entry.  This aggregation is motivated by the typical patterns of internet
+servers and clients, wherein a server accepts connections on a Well Known
+Port (such as port 80), with the client using varying ports on its end.
+</p>
+<p>
+Another special meaning is denoted by the "<tt>#</tt>" symbol, as below:
+</p>
+<pre>
+128.32.18.151#11     217.136.200.176#11     10  17K 1466K    0     0  17K 1466K
+</pre>
+
+<p>
+Some entries do not have a port numbers, because some internet traffic is
+neither TCP nor UDP (the IP protocols that use port numbers.)  Such traffic is
+instead reclassified by its IP protocol number.  In the above example,
+<tt>217.136.200.176</tt> sent a number of packets corresponding to
+protocol number 11 (very unusual...abusive network behavior perhaps?).  The 
+most common non-tcp/udp protocol seen in these reports is the ICMP protocol 
+(#1).  ICMP packets hold special information on the type and code of the 
+packet, which are shown in hexadecimal.  The first byte is the ICMP type,
+the second is the ICMP code.<br>
+<p>
+Read more about ICMP 
+<a href="http://www.iana.org/assignments/icmp-parameters">here</a>.</p>
+<p>
+The example below shows several "ICMP ECHO" communications:
+</p>
+
+<pre>
+128.32.18.151x800     217.136.200.176#1      10  17K 1466K    0     0  17K 1466K
+</pre>
+
+<p>Netflow recognizes the ICMP traffic specifically, and uses the port number of
+the destination to record additional information.  So, x800 should actually be
+interpreted as the ICMP type and code bytes <b>in hexadecimal
+notation</b>.  Referencing the above web site, we see that type 8, code 0
+corresponds to ECHO.
+</p>
+
+<p>The human readable section also includes "<tt>*:*</tt>" and
+"<tt>TOTAL:</tt>".
+"<tt>TOTAL:</tt>" is as it seems.  "<tt>*:*</tt>" means "other" for the given
+category on the left (a category being defined by a host ip and
+port).  So, referencing the above example:
+</p>
+
+<pre>
+128.32.155.79:20      128.3.183.99:*        68K  66M 51.2G  23M  925M  89M 52.1G
+128.32.155.79:20      128.218.214.102:4655    2   22   888   39 45.5K   61 46.4K
+128.32.155.79:20      64.54.98.71:*          24   50  2096   86 43.8K  136 45.9K
+128.32.155.79:20      *:*                    28  129 65.4K  115 27.6K  244   93K
+</pre>
+
+<p>
+The traffic-category of the last line should be read "traffic between port
+20 on 128.32.155.79 and all <b>other</b> endpoints <b>not listed above</b>
+(on local port 20).
+</p>
+
+<p>
+Th above data corresponds to socrates.berkeley.edu, an interactive Unix
+machine serving many campus users.  Ports 20, 80, and 25 correspond to 
+file-transfer, www, and email traffic, respectively.  The usage shown above is
+quite consistent with the role this machine is supposed to play.
+</p>
+
+<p>Feel free to email
+<a href="mailto:mhunter@ack.berkeley.edu">Mike Hunter</a> if you have any
+questions or comments regarding this document.</p>
+<!-- BEGIN INCLUDE TECHNICAL -->
+<center>
+
+<hr SIZE="1" WIDTH="98%">
+
+<p>
+
+Last revised:
+May 21, 2003<br>
+</p>
+</center>
+</td></tr></table>
+<!-- BEGIN INCLUDE FOOTER1 -->
+<center>
+<p>
+</center>
+<!-- END INCLUDE FOOTER1 -->
+</div>
+</body>
+</html>

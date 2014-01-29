@@ -1,0 +1,11 @@
+Requirements:
+
+Perl version 5.8 or above
+NetAddr::IP (available from CPAN)
+Cflow.pm (Make sure to build with flow-tools)
+
+You may need to change the hard-coded paths to flow-tools in the script,
+and you may want to provide a default flowdir and tempdir in the script.
+
+If you have all those things in place, it should just work out of the box.
+Put it in your favorite directory and fire away.
